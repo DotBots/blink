@@ -2,7 +2,7 @@
  * @file
  * @ingroup     app
  *
- * @brief       Blink Node application example
+ * @brief       blink Node application example
  *
  * @author Geovane Fedrecheski <geovane.fedrecheski@inria.fr>
  *
@@ -13,7 +13,7 @@
 
 int main(void)
 {
-    printf("Hello Blink Node\n");
+    printf("Hello blink Node\n");
 
     while (1) {
         __WFE();

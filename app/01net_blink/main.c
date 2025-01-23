@@ -2,7 +2,7 @@
  * @file
  * @ingroup     net_blink
  *
- * @brief       Example on how to use the Blink driver
+ * @brief       Example on how to use the blink driver
  *
  * @author Geovane Fedrecheski <geovane.fedrecheski@inria.fr>
  *

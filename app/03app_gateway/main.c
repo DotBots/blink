@@ -2,7 +2,7 @@
  * @file
  * @ingroup     app
  *
- * @brief       Blink Gateway application example
+ * @brief       blink Gateway application example
  *
  * @author Geovane Fedrecheski <geovane.fedrecheski@inria.fr>
  *
@@ -13,7 +13,7 @@
 
 int main(void)
 {
-    printf("Hello Blink Gateway\n");
+    printf("Hello blink Gateway\n");
 
     while (1) {
         __WFE();
