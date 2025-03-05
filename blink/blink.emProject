@@ -16,8 +16,14 @@
     <file file_name="protocol.c" />
     <file file_name="protocol.h" />
 
+    <file file_name="config.c" />
+    <file file_name="config.h" />
+
     <file file_name="scan.c" />
     <file file_name="scan.h" />
+
+    <file file_name="queue.c" />
+    <file file_name="queue.h" />
 
     <file file_name="scheduler.c" />
     <file file_name="all_schedules.c" />
