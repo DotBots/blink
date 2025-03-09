@@ -12,7 +12,7 @@
 
 #define BLINK_MAX_SCAN_LIST_SIZE (10)
 #define BLINK_SCAN_OLD_US (1000*1000*3) // rssi reading considered old after 3 seconds
-#define BLINK_SCAN_HANDOVER_HYSTERESIS (6) // hysteresis (in dBm) for handover
+#define BLINK_HANDOVER_RSSI_HYSTERESIS (6) // hysteresis (in dBm) for handover
 
 //=========================== variables =======================================
 

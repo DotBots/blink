@@ -617,6 +617,18 @@ static bool select_gateway_and_sync(void) {
         return false;
     }
 
+    if (bl_assoc_node_is_joined()) {
+        // this is a handover attempt
+        if (selected_gateway.beacon.src == mac_vars.synced_gateway) {
+            // should not happen, but just in case: already synced to this gateway, ignore it
+            return false;
+        }
+        if (selected_gateway.rssi < mac_vars.received_packet.rssi + BLINK_HANDOVER_RSSI_HYSTERESIS) {
+            // the new gateway is not strong enough, ignore it
+            return false;
+        }
+    }
+
     if (!bl_scheduler_set_schedule(selected_gateway.beacon.active_schedule_id)) {
         // schedule not found, a new scan will begin again via new_scan
         return false;
