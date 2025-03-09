@@ -332,7 +332,7 @@ static void start_background_scan(void) {
         &end_background_scan
     );
 
-    // 2. actually turn on the radio, in case it was off (bg scan might be already on since the last slot)
+    // 2. turn on the radio, in case it was off (bg scan might be already running since the last slot)
     if (!mac_vars.is_bg_scanning) {
         mac_vars.is_bg_scanning = true;
         set_slot_state(STATE_RX_DATA_LISTEN);
@@ -610,6 +610,7 @@ static void activity_scan_dispatch_new_schedule(void) {
 
 static bool select_gateway_and_sync(void) {
     uint32_t now_ts = bl_timer_hf_now(BLINK_TIMER_DEV);
+    bool is_handover = false;
 
     bl_channel_info_t selected_gateway = { 0 };
     if (!bl_scan_select(&selected_gateway, mac_vars.scan_started_ts, now_ts)) {
@@ -627,11 +628,17 @@ static bool select_gateway_and_sync(void) {
             // the new gateway is not strong enough, ignore it
             return false;
         }
+        is_handover = true;
     }
 
     if (!bl_scheduler_set_schedule(selected_gateway.beacon.active_schedule_id)) {
         // schedule not found, a new scan will begin again via new_scan
         return false;
+    }
+
+    if (is_handover) {
+        // a handover is going to happen, notify application about network disconnection
+        mac_vars.blink_event_callback(BLINK_DISCONNECTED, (bl_event_data_t){ 0 });
     }
 
     mac_vars.synced_gateway = selected_gateway.beacon.src;
