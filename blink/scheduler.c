@@ -201,28 +201,15 @@ void _compute_gateway_action(cell_t cell, bl_slot_info_t *slot_info) {
 void _compute_dotbot_action(cell_t cell, bl_slot_info_t *slot_info) {
     switch (cell.type) {
         case SLOT_TYPE_BEACON:
-            slot_info->radio_action = BLINK_RADIO_ACTION_RX;
         case SLOT_TYPE_DOWNLINK:
             slot_info->radio_action = BLINK_RADIO_ACTION_RX;
             break;
         case SLOT_TYPE_SHARED_UPLINK:
-            // NOTE: also apply the discovery optimization here, if no join request to be sent in this shared slot?!
             slot_info->radio_action = BLINK_RADIO_ACTION_TX;
             break;
         case SLOT_TYPE_UPLINK:
             if (cell.assigned_node_id == db_device_id()) {
                 slot_info->radio_action = BLINK_RADIO_ACTION_TX;
-            } else {
-#if(BLINK_ENABLE_BACKGROUND_SCAN == 1)
-                // OPTIMIZATION: listen for beacons during unassigned uplink slot
-                // listen to the same beacon channel for a whole slotframe
-                slot_info->radio_action = BLINK_RADIO_ACTION_RX;
-#if(BLINK_FIXED_CHANNEL != 0)
-                slot_info->channel = BLINK_FIXED_CHANNEL;
-#else // BLINK_FIXED_CHANNEL
-                slot_info->channel = BLINK_N_BLE_REGULAR_CHANNELS + (_schedule_vars.slotframe_counter % BLINK_N_BLE_ADVERTISING_CHANNELS);
-#endif // BLINK_FIXED_CHANNEL
-#endif // BLINK_ENABLE_BACKGROUND_SCAN
             }
             break;
         default:
