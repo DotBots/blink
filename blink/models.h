@@ -68,8 +68,6 @@ typedef struct {
     bl_radio_action_t radio_action;
     uint8_t channel;
     slot_type_t type;
-    bool available_for_scan;
-    bool slot_can_join;
 } bl_slot_info_t;
 
 typedef struct {
