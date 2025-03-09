@@ -63,6 +63,8 @@ uint8_t bl_scheduler_remaining_capacity(void);
 
 uint8_t bl_scheduler_get_active_schedule_slot_count(void);
 
+bool bl_scheduler_node_next_slot_will_sleep(uint64_t asn);
+
 /**
  * @brief Computes the channel to be used in a given slot.
  *

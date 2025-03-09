@@ -91,6 +91,7 @@ typedef struct {
 
     bool is_scanning; ///< Whether the node is scanning for gateways
     uint32_t scan_started_ts; ///< Timestamp of the start of the scan
+    uint32_t scan_expected_end_ts; ///< Timestamp of the expected end of the scan
     uint32_t current_scan_item_ts; ///< Timestamp of the current scan item
 
     bool is_bg_scanning; ///< Whether the node is scanning for gateways in the background
@@ -273,6 +274,7 @@ static void disable_radio_and_intra_slot_timers(void) {
 
 static void start_scan(void) {
     mac_vars.scan_started_ts = bl_timer_hf_now(BLINK_TIMER_DEV);
+    mac_vars.scan_expected_end_ts = mac_vars.scan_started_ts + BLINK_SCAN_MAX_DURATION;
     DEBUG_GPIO_SET(&pin0); // debug: show that a new scan started
     mac_vars.is_scanning = true;
 
@@ -316,9 +318,10 @@ static void end_scan(void) {
 // --------------------- start/end background scan --------
 
 static void start_background_scan(void) {
+    // 1. prepare timestamps and and arm timer
     mac_vars.scan_started_ts = mac_vars.start_slot_ts; // reuse the slot start time as reference
+    mac_vars.scan_expected_end_ts = mac_vars.scan_started_ts + (BLINK_TS_TX_OFFSET + BLINK_PACKET_TOA_WITH_PADDING);
     DEBUG_GPIO_SET(&pin0); // debug: show that a new scan started
-    mac_vars.is_bg_scanning = true;
 
     // end_scan will be called when the scan is over
     bl_timer_hf_set_oneshot_with_ref_us(
@@ -329,21 +332,28 @@ static void start_background_scan(void) {
         &end_background_scan
     );
 
-    set_slot_state(STATE_RX_DATA_LISTEN);
-    bl_radio_disable();
+    // 2. actually turn on the radio, in case it was off (bg scan might be already on since the last slot)
+    if (!mac_vars.is_bg_scanning) {
+        mac_vars.is_bg_scanning = true;
+        set_slot_state(STATE_RX_DATA_LISTEN);
+        bl_radio_disable();
 #ifdef BLINK_FIXED_SCAN_CHANNEL
-    bl_radio_set_channel(BLINK_FIXED_SCAN_CHANNEL); // not doing channel hopping for now
+        bl_radio_set_channel(BLINK_FIXED_SCAN_CHANNEL); // not doing channel hopping for now
 #else
-    puts("Channel hopping not implemented yet for scanning");
+        puts("Channel hopping not implemented yet for scanning");
 #endif
-    bl_radio_rx();
+        bl_radio_rx();
+    }
 }
 
 static void end_background_scan(void) {
-    mac_vars.is_bg_scanning = false;
-    DEBUG_GPIO_CLEAR(&pin0); // debug: show that the scan is over
-    set_slot_state(STATE_SLEEP);
-    disable_radio_and_intra_slot_timers();
+    if (!bl_scheduler_node_next_slot_will_sleep(mac_vars.asn)) {
+        // only stop the background scan if the next slot is not a sleep slot
+        mac_vars.is_bg_scanning = false;
+        DEBUG_GPIO_CLEAR(&pin0); // debug: show that the scan is over
+        set_slot_state(STATE_SLEEP);
+        disable_radio_and_intra_slot_timers();
+    }
 
     if (select_gateway_and_sync()) {
         // found a gateway and synchronized to it
@@ -657,7 +667,7 @@ static void activity_scan_end_frame(uint32_t end_frame_ts) {
     bl_assoc_handle_beacon(packet, packet_len, BLINK_FIXED_SCAN_CHANNEL, mac_vars.current_scan_item_ts);
 
     // if there is still enough time before end of scan, re-enable the radio
-    if (end_frame_ts + BLINK_BEACON_TOA_WITH_PADDING < mac_vars.scan_started_ts + BLINK_SCAN_MAX_DURATION) {
+    if (end_frame_ts + BLINK_BEACON_TOA_WITH_PADDING < mac_vars.scan_expected_end_ts) {
         set_slot_state(STATE_RX_DATA_LISTEN);
         // we cannot call rx immediately, because this runs in isr context/
         // and it might interfere with `if (NRF_RADIO->EVENTS_DISABLED)` in RADIO_IRQHandler
@@ -668,6 +678,8 @@ static void activity_scan_end_frame(uint32_t end_frame_ts) {
             20, // arbitrary value, just to give some time for the radio to turn off
             &bl_radio_rx
         );
+    } else {
+        set_slot_state(STATE_SLEEP);
     }
 }
 
