@@ -294,7 +294,7 @@ static void end_scan(void) {
     set_slot_state(STATE_SLEEP);
     disable_radio_and_intra_slot_timers();
 
-    if (select_gateway_and_sync()) { // WIP: just keep scanning
+    if (select_gateway_and_sync()) {
         // found a gateway and synchronized to it
         bl_assoc_set_state(JOIN_STATE_SYNCED);
         bl_queue_set_join_request(mac_vars.synced_gateway);
@@ -551,28 +551,15 @@ static void activity_scan_dispatch_new_schedule(void) {
 
 static bool select_gateway_and_sync(void) {
     uint32_t now_ts = bl_timer_hf_now(BLINK_TIMER_DEV);
-    disable_radio_and_intra_slot_timers();
 
     bl_channel_info_t selected_gateway = { 0 };
     if (!bl_scan_select(&selected_gateway, mac_vars.scan_started_ts, now_ts)) {
         // no gateway found
-        set_slot_state(STATE_SLEEP);
-        end_slot();
-        return false;
-    }
-
-    if (selected_gateway.timestamp == 0) {
-        // no gateway found
-        set_slot_state(STATE_SLEEP);
-        end_slot();
         return false;
     }
 
     if (!bl_scheduler_set_schedule(selected_gateway.beacon.active_schedule_id)) {
-        // schedule not found
-        // NOTE: what to do in this case? for now, just silently fail (a new scan will begin again via new_scan)
-        set_slot_state(STATE_SLEEP);
-        end_slot();
+        // schedule not found, a new scan will begin again via new_scan
         return false;
     }
 
