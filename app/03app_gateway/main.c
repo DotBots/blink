@@ -33,7 +33,7 @@ uint8_t packet[BLINK_PACKET_MAX_SIZE] = { 0 };
 uint8_t payload[] = { 0xFA, 0xFA, 0xFA, 0xFA, 0xFA };
 uint8_t payload_len = 5;
 
-extern schedule_t schedule_minuscule, schedule_small, schedule_huge, schedule_only_beacons, schedule_only_beacons_optimized_scan;
+extern schedule_t schedule_minuscule, schedule_tiny, schedule_small, schedule_huge, schedule_only_beacons, schedule_only_beacons_optimized_scan;
 
 //=========================== prototypes =======================================
 
@@ -46,7 +46,7 @@ int main(void)
     printf("Hello Blink Gateway\n");
     bl_timer_hf_init(BLINK_APP_TIMER_DEV);
 
-    bl_init(BLINK_GATEWAY, &schedule_minuscule, &blink_event_callback);
+    bl_init(BLINK_GATEWAY, &schedule_huge, &blink_event_callback);
 
     while (1) {
         __SEV();
@@ -94,7 +94,7 @@ void blink_event_callback(bl_event_t event, bl_event_data_t event_data) {
             // TODO: send list of joined_nodes to Edge Gateway via UART
             break;
         case BLINK_NODE_LEFT:
-            printf("Node left: %016llX\n", event_data.data.node_info.node_id);
+            printf("Node left: %016llX, reason: %u\n", event_data.data.node_info.node_id, event_data.tag);
             printf("Number of connected nodes: %d\n", bl_gateway_count_nodes());
             break;
         case BLINK_ERROR:

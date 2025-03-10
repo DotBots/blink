@@ -183,6 +183,13 @@ uint8_t bl_scheduler_get_active_schedule_slot_count(void) {
     return _schedule_vars.active_schedule_ptr->n_cells;
 }
 
+cell_t bl_scheduler_node_peek_slot(uint64_t asn) {
+    size_t cell_index = (asn) % (_schedule_vars.active_schedule_ptr)->n_cells;
+    cell_t cell = (_schedule_vars.active_schedule_ptr)->cells[cell_index];
+
+    return cell;
+}
+
 //=========================== private ==========================================
 
 void _compute_gateway_action(cell_t cell, bl_slot_info_t *slot_info) {
@@ -210,6 +217,8 @@ void _compute_dotbot_action(cell_t cell, bl_slot_info_t *slot_info) {
         case SLOT_TYPE_UPLINK:
             if (cell.assigned_node_id == db_device_id()) {
                 slot_info->radio_action = BLINK_RADIO_ACTION_TX;
+            } else {
+                slot_info->radio_action = BLINK_RADIO_ACTION_SLEEP;
             }
             break;
         default:

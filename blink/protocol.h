@@ -8,16 +8,15 @@
 //=========================== defines ==========================================
 
 #define BLINK_PROTOCOL_VERSION 1
-#define BLINK_PACKET_MAX_SIZE 255
 
 //=========================== variables ========================================
 
 typedef enum {
     BLINK_PACKET_BEACON = 1,
     BLINK_PACKET_JOIN_REQUEST = 2,
-    BLINK_PACKET_JOIN_RESPONSE = 3,
-    BLINK_PACKET_KEEPALIVE = 4,
-    BLINK_PACKET_DATA = 5,
+    BLINK_PACKET_JOIN_RESPONSE = 4,
+    BLINK_PACKET_KEEPALIVE = 8,
+    BLINK_PACKET_DATA = 16,
 } bl_packet_type_t;
 
 // general packet header

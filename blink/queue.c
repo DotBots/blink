@@ -65,6 +65,7 @@ uint8_t bl_queue_next_packet(slot_type_t slot_type, uint8_t *packet) {
     } else if (bl_get_node_type() == BLINK_NODE) {
         if (slot_type == SLOT_TYPE_SHARED_UPLINK) {
             if (bl_assoc_node_ready_to_join()) {
+                bl_assoc_set_state(JOIN_STATE_JOINING);
                 len = bl_queue_get_join_packet(packet);
             }
         } else if (slot_type == SLOT_TYPE_UPLINK) {

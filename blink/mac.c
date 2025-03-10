@@ -11,6 +11,7 @@
 #include <nrf.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "blink.h"
 #include "mac.h"
@@ -67,16 +68,6 @@ typedef enum {
 } bl_mac_state_t;
 
 typedef struct {
-    uint8_t channel;
-    int8_t rssi;
-    uint32_t ts;
-    uint64_t asn;
-    bool to_me;
-    uint8_t packet[BLINK_PACKET_MAX_SIZE];
-    uint8_t packet_len;
-} bl_received_packet_t;
-
-typedef struct {
     bl_node_type_t node_type; //< whether the node is a gateway or a dotbot
     uint64_t device_id; ///< Device ID
 
@@ -91,9 +82,13 @@ typedef struct {
 
     bool is_scanning; ///< Whether the node is scanning for gateways
     uint32_t scan_started_ts; ///< Timestamp of the start of the scan
+    uint32_t scan_expected_end_ts; ///< Timestamp of the expected end of the scan
     uint32_t current_scan_item_ts; ///< Timestamp of the current scan item
 
+    bool is_bg_scanning; ///< Whether the node is scanning for gateways in the background
+
     uint64_t synced_gateway; ///< ID of the gateway the node is synchronized with
+    uint32_t synced_ts; ///< Timestamp of the last synchronization
 } mac_vars_t;
 
 //=========================== variables ========================================
@@ -133,11 +128,16 @@ static void activity_rie1(void);
 static void activity_ri4(uint32_t ts);
 static void activity_rie2(void);
 
+static void fix_drift(uint32_t ts);
+
 static void start_scan(void);
 static void end_scan(void);
 static void activity_scan_start_frame(uint32_t ts);
 static void activity_scan_end_frame(uint32_t ts);
 static bool select_gateway_and_sync(void);
+
+static void start_background_scan(void);
+static void end_background_scan(void);
 
 static void isr_mac_radio_start_frame(uint32_t ts);
 static void isr_mac_radio_end_frame(uint32_t ts);
@@ -222,10 +222,11 @@ static void new_slot_synced(void) {
 
     // too long without receiving a packet? disconnect
     if (mac_vars.node_type == BLINK_GATEWAY) {
-        bl_assoc_clear_old_nodes(mac_vars.asn);
-    } else if (mac_vars.node_type == BLINK_NODE && bl_assoc_node_is_joined()) {
-        if ((mac_vars.asn - mac_vars.received_packet.asn) > bl_scheduler_get_active_schedule_slot_count() * BLINK_MAX_SLOTFRAMES_NO_RX_LEAVE) {
-            mac_vars.blink_event_callback(BLINK_DISCONNECTED, (bl_event_data_t){ 0 });
+        bl_assoc_gateway_clear_old_nodes(mac_vars.asn);
+    } else if (mac_vars.node_type == BLINK_NODE && bl_assoc_is_joined()) {
+        if (bl_assoc_node_gateway_is_lost(mac_vars.asn)) {
+            bl_event_data_t event_data = { .data.gateway_info.gateway_id = mac_vars.synced_gateway, .tag = BLINK_PEER_LOST };
+            mac_vars.blink_event_callback(BLINK_DISCONNECTED, event_data);
             bl_assoc_set_state(JOIN_STATE_IDLE);
             set_slot_state(STATE_SLEEP);
             end_slot();
@@ -241,9 +242,13 @@ static void new_slot_synced(void) {
     } else if (mac_vars.current_slot_info.radio_action == BLINK_RADIO_ACTION_RX) {
         activity_ri1();
     } else if (mac_vars.current_slot_info.radio_action == BLINK_RADIO_ACTION_SLEEP) {
-        // TODO: check with association module if we should use this slot and do "background scan"
-        set_slot_state(STATE_SLEEP);
-        end_slot();
+        // check if we should use this slot for background scan
+        if (mac_vars.node_type == BLINK_GATEWAY || !BLINK_ENABLE_BACKGROUND_SCAN) {
+            set_slot_state(STATE_SLEEP);
+            end_slot();
+        } else { // node with background scan enabled
+            start_background_scan();
+        }
     }
 }
 
@@ -264,6 +269,7 @@ static void disable_radio_and_intra_slot_timers(void) {
 
 static void start_scan(void) {
     mac_vars.scan_started_ts = bl_timer_hf_now(BLINK_TIMER_DEV);
+    mac_vars.scan_expected_end_ts = mac_vars.scan_started_ts + BLINK_SCAN_MAX_DURATION;
     DEBUG_GPIO_SET(&pin0); // debug: show that a new scan started
     mac_vars.is_scanning = true;
 
@@ -283,7 +289,7 @@ static void start_scan(void) {
 #ifdef BLINK_FIXED_SCAN_CHANNEL
     bl_radio_set_channel(BLINK_FIXED_SCAN_CHANNEL); // not doing channel hopping for now
 #else
-    bl_radio_set_channel(mac_vars.current_slot_info.channel);
+    puts("Channel hopping not implemented yet for scanning");
 #endif
     bl_radio_rx();
 }
@@ -301,6 +307,62 @@ static void end_scan(void) {
     } else {
         // no gateway found, back to scanning
         start_scan();
+    }
+}
+
+// --------------------- start/end background scan --------
+
+static void start_background_scan(void) {
+    // 1. prepare timestamps and and arm timer
+    if (!mac_vars.is_bg_scanning) {
+        mac_vars.scan_started_ts = mac_vars.start_slot_ts; // reuse the slot start time as reference
+        mac_vars.scan_expected_end_ts = mac_vars.scan_started_ts + (BLINK_TS_TX_OFFSET + BLINK_PACKET_TOA_WITH_PADDING);
+    }
+
+    // end_scan will be called when the scan is over
+    bl_timer_hf_set_oneshot_with_ref_us(
+        BLINK_TIMER_DEV,
+        BLINK_TIMER_CHANNEL_1, // remember that the inter-slot timer is already being used for the slot
+        mac_vars.start_slot_ts, // in this case, we use the slot start time as reference because we are synced
+        BLINK_TS_TX_OFFSET + BLINK_PACKET_TOA_WITH_PADDING, // scan for some time during this slot
+        &end_background_scan
+    );
+
+    // 2. turn on the radio, in case it was off (bg scan might be already running since the last slot)
+    if (!mac_vars.is_bg_scanning) {
+        set_slot_state(STATE_RX_DATA_LISTEN);
+        bl_radio_disable();
+#ifdef BLINK_FIXED_SCAN_CHANNEL
+        bl_radio_set_channel(BLINK_FIXED_SCAN_CHANNEL); // not doing channel hopping for now
+#else
+        puts("Channel hopping not implemented yet for scanning");
+#endif
+        bl_radio_rx();
+    }
+    mac_vars.is_bg_scanning = true;
+}
+
+static void end_background_scan(void) {
+    // DEBUG_GPIO_SET(&pin3); DEBUG_GPIO_CLEAR(&pin3); // debug: show that the background scan is over
+    cell_t next_slot = bl_scheduler_node_peek_slot(mac_vars.asn); // remember: the asn was already incremented at new_slot_synced
+    bool sleep_next_slot = next_slot.type == SLOT_TYPE_UPLINK && next_slot.assigned_node_id != db_device_id();
+
+    if (!sleep_next_slot) {
+        // only stop the background scan if the next slot is not a sleep slot
+        mac_vars.is_bg_scanning = false;
+        set_slot_state(STATE_SLEEP);
+        disable_radio_and_intra_slot_timers();
+    }
+
+    if (select_gateway_and_sync()) {
+        // found a gateway and synchronized to it
+        bl_assoc_set_state(JOIN_STATE_SYNCED);
+        bl_queue_set_join_request(mac_vars.synced_gateway);
+
+        // stop the background scan if we are synced!
+        mac_vars.is_bg_scanning = false;
+        set_slot_state(STATE_SLEEP);
+        disable_radio_and_intra_slot_timers();
     }
 }
 
@@ -327,6 +389,7 @@ static void activity_ti1(void) {
         &activity_tie1
     );
 
+    // FIXME: check if there is a packet to send before arming the timers
     uint8_t packet[BLINK_PACKET_MAX_SIZE];
     uint8_t packet_len = bl_queue_next_packet(mac_vars.current_slot_info.type, packet);
     if (packet_len > 0) {
@@ -408,11 +471,7 @@ static void activity_ri2(void) {
     set_slot_state(STATE_RX_DATA_LISTEN);
 
     bl_radio_disable();
-#ifdef BLINK_FIXED_CHANNEL
-    bl_radio_set_channel(BLINK_FIXED_CHANNEL); // not doing channel hopping for now
-#else
     bl_radio_set_channel(mac_vars.current_slot_info.channel);
-#endif
     bl_radio_rx();
 }
 
@@ -424,35 +483,7 @@ static void activity_ri3(uint32_t ts) {
     // cancel timer for rx_guard
     bl_timer_hf_cancel(BLINK_TIMER_DEV, BLINK_TIMER_CHANNEL_2);
 
-    if (bl_get_node_type() == BLINK_GATEWAY) {
-        // the gateway is the time reference, so no need to check for clock drift
-        return;
-    }
-
-    uint32_t time_cpu_periph = 47; // got this value by looking at the logic analyzer
-
-    uint32_t expected_ts = mac_vars.start_slot_ts + slot_durations.tx_offset + time_cpu_periph;
-    int32_t clock_drift = ts - expected_ts;
-    uint32_t abs_clock_drift = abs(clock_drift);
-
-    if (abs_clock_drift < 5) {
-        // very small corrections can safely be ignored
-    } else if (abs_clock_drift < 80) {
-        // drift is acceptable
-        // adjust the slot reference
-        bl_timer_hf_adjust_periodic_us(
-            BLINK_TIMER_DEV,
-            BLINK_TIMER_INTER_SLOT_CHANNEL,
-            clock_drift
-        );
-        DEBUG_GPIO_SET(&pin3); DEBUG_GPIO_CLEAR(&pin3); // show that the slot was adjusted for clock drift
-    } else {
-        // drift is too high, need to re-sync
-        bl_assoc_set_state(JOIN_STATE_IDLE);
-        set_slot_state(STATE_SLEEP);
-        end_slot();
-        start_scan();
-    }
+    mac_vars.received_packet.start_ts = ts;
 }
 
 static void activity_rie1(void) {
@@ -489,43 +520,20 @@ static void activity_ri4(uint32_t ts) {
         return;
     }
 
-    if (header->dst != mac_vars.device_id && header->dst != BLINK_BROADCAST_ADDRESS && header->type != BLINK_PACKET_BEACON) {
-        end_slot();
-        return;
+    if (mac_vars.node_type == BLINK_NODE && bl_assoc_is_joined() && header->src == mac_vars.synced_gateway) {
+        // only fix drift if the packet comes from the gateway we are synced to
+        // NOTE: this should ideally be done at ri3 (when the packet starts), but we don't have the id there.
+        //       could use use the physical BLE address for that?
+        fix_drift(mac_vars.received_packet.start_ts);
     }
 
-    // now that we know it's a blink packet, either for me, or broadcast, or a beacon, store some info about it
+    // now that we know it's a blink packet, store some info about it
     mac_vars.received_packet.channel = mac_vars.current_slot_info.channel;
     mac_vars.received_packet.rssi = bl_radio_rssi();
-    mac_vars.received_packet.ts = ts;
+    mac_vars.received_packet.end_ts = ts;
     mac_vars.received_packet.asn = mac_vars.asn;
 
-    if (mac_vars.node_type == BLINK_GATEWAY && header->dst == mac_vars.device_id) {
-        bl_assoc_save_received_from_node(header->src, mac_vars.asn);
-    }
-
-    switch (header->type) {
-        case BLINK_PACKET_BEACON:
-        case BLINK_PACKET_JOIN_REQUEST:
-        case BLINK_PACKET_JOIN_RESPONSE:
-            bl_assoc_handle_packet(mac_vars.received_packet.packet, mac_vars.received_packet.packet_len);
-            break;
-        case BLINK_PACKET_DATA:
-            // send the packet to the application
-            if (mac_vars.blink_event_callback) {
-                bl_event_data_t event_data = {
-                    .data.new_packet = {
-                        .packet = mac_vars.received_packet.packet,
-                        .length = mac_vars.received_packet.packet_len
-                    }
-                };
-                mac_vars.blink_event_callback(BLINK_NEW_PACKET, event_data);
-            }
-            break;
-        case BLINK_PACKET_KEEPALIVE:
-            // at this point can just ignore keepalives, since node info was already saved in the association module
-            break;
-    }
+    bl_handle_packet(mac_vars.received_packet.packet, mac_vars.received_packet.packet_len);
 
     end_slot();
 }
@@ -536,6 +544,35 @@ static void activity_rie2(void) {
     set_slot_state(STATE_SLEEP);
 
     end_slot();
+}
+
+static void fix_drift(uint32_t ts) {
+    uint32_t time_cpu_periph = 47; // got this value by looking at the logic analyzer
+
+    uint32_t expected_ts = mac_vars.start_slot_ts + slot_durations.tx_offset + time_cpu_periph;
+    int32_t clock_drift = ts - expected_ts;
+    uint32_t abs_clock_drift = abs(clock_drift);
+
+    if (abs_clock_drift < 5) {
+        // very small corrections can safely be ignored
+    } else if (abs_clock_drift < 80) {
+        // drift is acceptable
+        // adjust the slot reference
+        bl_timer_hf_adjust_periodic_us(
+            BLINK_TIMER_DEV,
+            BLINK_TIMER_INTER_SLOT_CHANNEL,
+            clock_drift
+        );
+        DEBUG_GPIO_SET(&pin3); DEBUG_GPIO_CLEAR(&pin3); // show that the slot was adjusted for clock drift
+    } else {
+        // drift is too high, need to re-sync
+        bl_event_data_t event_data = { .data.gateway_info.gateway_id = mac_vars.synced_gateway, .tag = BLINK_OUT_OF_SYNC };
+        mac_vars.blink_event_callback(BLINK_DISCONNECTED, event_data);
+        bl_assoc_set_state(JOIN_STATE_IDLE);
+        set_slot_state(STATE_SLEEP);
+        end_slot();
+        start_scan();
+    }
 }
 
 // --------------------- scan activities ------------------
@@ -551,6 +588,7 @@ static void activity_scan_dispatch_new_schedule(void) {
 
 static bool select_gateway_and_sync(void) {
     uint32_t now_ts = bl_timer_hf_now(BLINK_TIMER_DEV);
+    bool is_handover = false;
 
     bl_channel_info_t selected_gateway = { 0 };
     if (!bl_scan_select(&selected_gateway, mac_vars.scan_started_ts, now_ts)) {
@@ -558,9 +596,32 @@ static bool select_gateway_and_sync(void) {
         return false;
     }
 
+    if (bl_assoc_is_joined()) {
+        // this is a handover attempt
+        if (selected_gateway.beacon.src == mac_vars.synced_gateway) {
+            // should not happen, but just in case: already synced to this gateway, ignore it
+            return false;
+        }
+        if (mac_vars.synced_ts - selected_gateway.timestamp < BLINK_HANDOVER_MIN_INTERVAL) {
+            // just recently performed a synchronization, will not try again so soon
+            return false;
+        }
+        if (selected_gateway.rssi > mac_vars.received_packet.rssi + BLINK_HANDOVER_RSSI_HYSTERESIS) {
+            // the new gateway is not strong enough, ignore it
+            return false;
+        }
+        is_handover = true;
+    }
+
     if (!bl_scheduler_set_schedule(selected_gateway.beacon.active_schedule_id)) {
         // schedule not found, a new scan will begin again via new_scan
         return false;
+    }
+
+    if (is_handover) {
+        // a handover is going to happen, notify application about network disconnection
+        bl_event_data_t event_data = { .data.gateway_info.gateway_id = mac_vars.synced_gateway, .tag = BLINK_HANDOVER };
+        mac_vars.blink_event_callback(BLINK_DISCONNECTED, event_data);
     }
 
     mac_vars.synced_gateway = selected_gateway.beacon.src;
@@ -608,7 +669,7 @@ static void activity_scan_end_frame(uint32_t end_frame_ts) {
     bl_assoc_handle_beacon(packet, packet_len, BLINK_FIXED_SCAN_CHANNEL, mac_vars.current_scan_item_ts);
 
     // if there is still enough time before end of scan, re-enable the radio
-    if (end_frame_ts + BLINK_BEACON_TOA_WITH_PADDING < mac_vars.scan_started_ts + BLINK_SCAN_MAX_DURATION) {
+    if (end_frame_ts + BLINK_BEACON_TOA_WITH_PADDING < mac_vars.scan_expected_end_ts) {
         set_slot_state(STATE_RX_DATA_LISTEN);
         // we cannot call rx immediately, because this runs in isr context/
         // and it might interfere with `if (NRF_RADIO->EVENTS_DISABLED)` in RADIO_IRQHandler
@@ -619,6 +680,8 @@ static void activity_scan_end_frame(uint32_t end_frame_ts) {
             20, // arbitrary value, just to give some time for the radio to turn off
             &bl_radio_rx
         );
+    } else {
+        set_slot_state(STATE_SLEEP);
     }
 }
 
@@ -627,7 +690,7 @@ static void activity_scan_end_frame(uint32_t end_frame_ts) {
 // --------------------- radio ---------------------
 static void isr_mac_radio_start_frame(uint32_t ts) {
     DEBUG_GPIO_SET(&pin2);
-    if (mac_vars.is_scanning) {
+    if (mac_vars.is_scanning || mac_vars.is_bg_scanning) {
         activity_scan_start_frame(ts);
         return;
     }
@@ -644,7 +707,7 @@ static void isr_mac_radio_start_frame(uint32_t ts) {
 static void isr_mac_radio_end_frame(uint32_t ts) {
     DEBUG_GPIO_CLEAR(&pin2);
 
-    if (mac_vars.is_scanning) {
+    if (mac_vars.is_scanning || mac_vars.is_bg_scanning) {
         activity_scan_end_frame(ts);
         return;
     }

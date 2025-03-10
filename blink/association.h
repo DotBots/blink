@@ -33,12 +33,18 @@ typedef enum {
 
 void bl_assoc_init(bl_event_cb_t event_callback);
 void bl_assoc_set_state(bl_assoc_state_t join_state);
-bool bl_assoc_node_ready_to_join(void);
-bool bl_assoc_node_is_joined(void);
+bl_assoc_state_t bl_assoc_get_state(void);
+bool bl_assoc_is_joined(void);
 void bl_assoc_handle_beacon(uint8_t *packet, uint8_t length, uint8_t channel, uint32_t ts);
 void bl_assoc_handle_packet(uint8_t *packet, uint8_t length);
 
-bool bl_assoc_save_received_from_node(uint64_t node_id, uint64_t asn);
-void bl_assoc_clear_old_nodes(uint64_t asn);
+bool bl_assoc_node_ready_to_join(void);
+bool bl_assoc_node_gateway_is_lost(uint32_t asn);
+void bl_assoc_node_keep_gateway_alive(uint64_t asn);
+
+bool bl_assoc_gateway_node_is_joined(uint64_t node_id);
+
+bool bl_assoc_gateway_keep_node_alive(uint64_t node_id, uint64_t asn);
+void bl_assoc_gateway_clear_old_nodes(uint64_t asn);
 
 #endif // __ASSOCIATION_H

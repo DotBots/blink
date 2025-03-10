@@ -63,6 +63,8 @@ uint8_t bl_scheduler_remaining_capacity(void);
 
 uint8_t bl_scheduler_get_active_schedule_slot_count(void);
 
+cell_t bl_scheduler_node_peek_slot(uint64_t asn);
+
 /**
  * @brief Computes the channel to be used in a given slot.
  *

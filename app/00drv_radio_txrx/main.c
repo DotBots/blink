@@ -17,6 +17,7 @@
 #include "timer_hf.h"
 #include "protocol.h"
 #include "scheduler.h"
+#include "mac.h"
 
 //=========================== debug ============================================
 
@@ -39,7 +40,7 @@ typedef struct {
 
 txrx_vars_t txrx_vars = { 0 };
 
-extern schedule_t schedule_only_beacons;
+extern schedule_t schedule_only_beacons, schedule_huge;
 
 //=========================== prototypes ======================================
 
@@ -57,9 +58,9 @@ int main(void) {
     db_gpio_init(&pin1, DB_GPIO_OUT);
 
     bl_radio_init(&isr_radio_start_frame, &isr_radio_end_frame, DB_RADIO_BLE_2MBit);
-    bl_radio_set_channel(BLINK_FIXED_CHANNEL);
+    bl_radio_set_channel(BLINK_FIXED_SCAN_CHANNEL);
 
-    printf("BLINK_FIXED_CHANNEL = %d\n", BLINK_FIXED_CHANNEL);
+    printf("BLINK_FIXED_SCAN_CHANNEL = %d\n", BLINK_FIXED_SCAN_CHANNEL);
 
     bl_timer_hf_set_periodic_us(BLINK_TIMER_DEV, 0, 5000, send_beacon_prepare); // 5 ms
 
@@ -73,7 +74,7 @@ int main(void) {
 static void send_beacon_prepare(void) {
     printf("Sending beacon from %llx\n", db_device_id());
     uint8_t packet[BLINK_PACKET_MAX_SIZE] = { 0 };
-    size_t len = bl_build_packet_beacon(packet, txrx_vars.asn++, 10, schedule_only_beacons.id);
+    size_t len = bl_build_packet_beacon(packet, txrx_vars.asn++, 10, schedule_huge.id);
     bl_radio_disable();
     bl_radio_tx_prepare(packet, len);
     DEBUG_GPIO_SET(&pin0);

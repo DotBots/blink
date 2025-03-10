@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#include "device.h"
 #include "radio.h"
 #include "association.h"
 #include "scan.h"
@@ -56,6 +57,8 @@ typedef struct {
     bl_assoc_state_t state;
     bl_event_cb_t blink_event_callback;
 
+    uint32_t last_received_from_gateway_asn; ///< Last received packet when in joined state
+
     // NOTE: this could be improved by merging with the scheduler table
     // however, the scheduler table already uses a lot of memory because everything is hardcoded
     bl_received_from_node_t last_received_from_node[BLINK_MAX_NODES];
@@ -63,7 +66,7 @@ typedef struct {
 
 //=========================== variables =======================================
 
-static assoc_vars_t assoc_vars = { 0 };
+assoc_vars_t assoc_vars = { 0 };
 
 //=========================== prototypes ======================================
 
@@ -82,19 +85,6 @@ void bl_assoc_init(bl_event_cb_t event_callback) {
     assoc_vars.blink_event_callback = event_callback;
 
     bl_assoc_set_state(JOIN_STATE_IDLE);
-}
-
-bool bl_assoc_node_ready_to_join(void) {
-    // TODO: also call bl_backoff_is_ready() here
-    return assoc_vars.state == JOIN_STATE_SYNCED;
-}
-
-bool bl_assoc_gateway_pending_join_response(void) {
-    return assoc_vars.state == JOIN_STATE_JOINING;
-}
-
-bool bl_assoc_node_is_joined(void) {
-    return assoc_vars.state == JOIN_STATE_JOINED;
 }
 
 inline void bl_assoc_set_state(bl_assoc_state_t state) {
@@ -126,63 +116,45 @@ inline void bl_assoc_set_state(bl_assoc_state_t state) {
 #endif
 }
 
-void bl_assoc_handle_beacon(uint8_t *packet, uint8_t length, uint8_t channel, uint32_t ts) {
-    (void)length;
+// ------------ node functions ------------
 
-    if (packet[1] != BLINK_PACKET_BEACON) {
-        return;
-    }
-
-    // now that we know it's a beacon packet, parse and process it
-    bl_beacon_packet_header_t *beacon = (bl_beacon_packet_header_t *)packet;
-
-    if (beacon->version != BLINK_PROTOCOL_VERSION) {
-        // ignore packet with different protocol version
-        return;
-    }
-
-    if (beacon->remaining_capacity == 0) {
-        // this gateway is full, ignore it
-        return;
-    }
-
-    // save this scan info
-    bl_scan_add(*beacon, bl_radio_rssi(), channel, ts, 0); // asn not used anymore during scan
-
-    return;
+bl_assoc_state_t bl_assoc_get_state(void) {
+    return assoc_vars.state;
 }
 
-void bl_assoc_handle_packet(uint8_t *packet, uint8_t length) {
-    (void)length;
-    bl_packet_header_t *header = (bl_packet_header_t *)packet;
-
-    if (bl_get_node_type() == BLINK_GATEWAY) {
-        if (header->type == BLINK_PACKET_JOIN_REQUEST) {
-            // try to assign a cell to the node
-            int16_t cell_id = bl_scheduler_assign_next_available_uplink_cell(header->src);
-            if (cell_id >= 0) {
-                bl_queue_set_join_response(header->src, (uint8_t)cell_id);
-                assoc_vars.blink_event_callback(BLINK_NODE_JOINED, (bl_event_data_t){ .data.node_info.node_id = header->src });
-            } else {
-                assoc_vars.blink_event_callback(BLINK_ERROR, (bl_event_data_t){ 0 });
-            }
-        }
-    } else if (bl_get_node_type() == BLINK_NODE) {
-        if (header->type == BLINK_PACKET_JOIN_RESPONSE) {
-            // cell_id is just after the header
-            uint8_t cell_id = packet[sizeof(bl_packet_header_t)];
-            if (bl_scheduler_assign_myself_to_cell(cell_id)) {
-                bl_assoc_set_state(JOIN_STATE_JOINED);
-                bl_event_data_t event_data = { .data.gateway_info.gateway_id = header->src };
-                assoc_vars.blink_event_callback(BLINK_CONNECTED, event_data);
-            } else {
-                assoc_vars.blink_event_callback(BLINK_ERROR, (bl_event_data_t){ 0 });
-            }
-        }
-    }
+bool bl_assoc_is_joined(void) {
+    return assoc_vars.state == JOIN_STATE_JOINED;
 }
 
-bool bl_assoc_save_received_from_node(uint64_t node_id, uint64_t asn) {
+bool bl_assoc_node_ready_to_join(void) {
+    // TODO: also call bl_backoff_is_ready() here
+    return assoc_vars.state == JOIN_STATE_SYNCED;
+}
+
+bool bl_assoc_node_gateway_is_lost(uint32_t asn) {
+    return (asn - assoc_vars.last_received_from_gateway_asn) > bl_scheduler_get_active_schedule_slot_count() * BLINK_MAX_SLOTFRAMES_NO_RX_LEAVE;
+}
+
+void bl_assoc_node_keep_gateway_alive(uint64_t asn) {
+    assoc_vars.last_received_from_gateway_asn = asn;
+}
+
+// ------------ gateway functions ---------
+
+bool bl_assoc_gateway_pending_join_response(void) {
+    return assoc_vars.state == JOIN_STATE_JOINING;
+}
+
+bool bl_assoc_gateway_node_is_joined(uint64_t node_id) {
+    for (size_t i = 0; i < BLINK_MAX_NODES; i++) {
+        if (assoc_vars.last_received_from_node[i].node_id == node_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool bl_assoc_gateway_keep_node_alive(uint64_t node_id, uint64_t asn) {
     // save the node_id and asn
     // if the node_id is already in the list, update the asn
     // otherwise, add it to the first empty spot
@@ -201,15 +173,14 @@ bool bl_assoc_save_received_from_node(uint64_t node_id, uint64_t asn) {
     return false;
 }
 
-void bl_assoc_clear_old_nodes(uint64_t asn) {
+void bl_assoc_gateway_clear_old_nodes(uint64_t asn) {
     // clear all nodes that have not been heard from in the last N asn
     // also deassign the cells from the scheduler
     uint64_t max_asn_old = bl_scheduler_get_active_schedule_slot_count() * BLINK_MAX_SLOTFRAMES_NO_RX_LEAVE;
     for (size_t i = 0; i < BLINK_MAX_NODES; i++) {
         bl_received_from_node_t *node = &assoc_vars.last_received_from_node[i];
-        if (node->node_id != 0 &&
-            asn - node->asn > max_asn_old) {
-            assoc_vars.blink_event_callback(BLINK_NODE_LEFT, (bl_event_data_t){ .data.node_info.node_id = node->node_id });
+        if (node->node_id != 0 && asn - node->asn > max_asn_old) {
+            assoc_vars.blink_event_callback(BLINK_NODE_LEFT, (bl_event_data_t){ .data.node_info.node_id = node->node_id, .tag = BLINK_PEER_LOST });
             // deassign the cell
             bl_scheduler_deassign_uplink_cell(node->node_id);
             // clear the node
@@ -217,6 +188,34 @@ void bl_assoc_clear_old_nodes(uint64_t asn) {
             node->asn = 0;
         }
     }
+}
+
+// ------------ packet handlers -------
+
+void bl_assoc_handle_beacon(uint8_t *packet, uint8_t length, uint8_t channel, uint32_t ts) {
+    (void)length;
+
+    if (packet[1] != BLINK_PACKET_BEACON) {
+        return;
+    }
+
+    // now that we know it's a beacon packet, parse and process it
+    bl_beacon_packet_header_t *beacon = (bl_beacon_packet_header_t *)packet;
+
+    if (beacon->version != BLINK_PROTOCOL_VERSION) {
+        // ignore packet with different protocol version
+        return;
+    }
+
+    if (beacon->remaining_capacity == 0) { // TODO: what if I am joined to this gateway? add a check for it.
+        // this gateway is full, ignore it
+        return;
+    }
+
+    // save this scan info
+    bl_scan_add(*beacon, bl_radio_rssi(), channel, ts, 0); // asn not used anymore during scan
+
+    return;
 }
 
 //=========================== callbacks =======================================

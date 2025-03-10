@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#include "radio.h"
 #include "timer_hf.h"
 #include "blink.h"
 #include "protocol.h"
@@ -31,7 +32,7 @@ node_vars_t node_vars = { 0 };
 uint8_t payload[] = { 0xF0, 0xF0, 0xF0, 0xF0, 0xF0 };
 uint8_t payload_len = 5;
 
-extern schedule_t schedule_minuscule, schedule_small, schedule_huge, schedule_only_beacons, schedule_only_beacons_optimized_scan;
+extern schedule_t schedule_minuscule, schedule_tiny, schedule_small, schedule_huge, schedule_only_beacons, schedule_only_beacons_optimized_scan;
 
 //=========================== prototypes =======================================
 
@@ -44,7 +45,7 @@ int main(void)
     printf("Hello Blink Node\n");
     bl_timer_hf_init(BLINK_APP_TIMER_DEV);
 
-    bl_init(BLINK_NODE, &schedule_minuscule, &blink_event_callback);
+    bl_init(BLINK_NODE, &schedule_huge, &blink_event_callback);
 
     while (1) {
         __SEV();
@@ -65,18 +66,22 @@ int main(void)
 static void blink_event_callback(bl_event_t event, bl_event_data_t event_data) {
     switch (event) {
         case BLINK_NEW_PACKET:
-            printf("Blink received data packet of length %d: ", event_data.data.new_packet.length);
+            printf("New data packet, rssi %d, length %d: ", bl_radio_rssi(), event_data.data.new_packet.length);
             for (int i = 0; i < event_data.data.new_packet.length; i++) {
                 printf("%02X ", event_data.data.new_packet.packet[i]);
             }
             printf("\n");
             break;
-        case BLINK_CONNECTED:
-            printf("Connected\n");
+        case BLINK_CONNECTED: {
+            uint64_t gateway_id = event_data.data.gateway_info.gateway_id;
+            printf("Connected to gateway %016llX\n", gateway_id);
             break;
-        case BLINK_DISCONNECTED:
-            printf("Disconnected\n");
+        }
+        case BLINK_DISCONNECTED: {
+            uint64_t gateway_id = event_data.data.gateway_info.gateway_id;
+            printf("Disconnected from gateway %016llX, reason: %u\n", gateway_id, event_data.tag);
             break;
+        }
         case BLINK_ERROR:
             printf("Error\n");
             break;

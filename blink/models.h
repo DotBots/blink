@@ -12,13 +12,15 @@
 #define BLINK_N_BLE_ADVERTISING_CHANNELS 3
 
 // #ifndef BLINK_FIXED_CHANNEL
-#define BLINK_FIXED_CHANNEL 37 // to hardcode the channel, use a valid value other than 0
+#define BLINK_FIXED_CHANNEL 0 // to hardcode the channel, use a valid value other than 0
 #define BLINK_FIXED_SCAN_CHANNEL 37 // to hardcode the channel, use a valid value other than 0
 // #endif
 
 #define BLINK_N_CELLS_MAX 137
 
-#define BLINK_ENABLE_BACKGROUND_SCAN 0
+#define BLINK_ENABLE_BACKGROUND_SCAN 1
+
+#define BLINK_PACKET_MAX_SIZE 255
 
 //=========================== types ===========================================
 
@@ -36,6 +38,12 @@ typedef enum {
     BLINK_ERROR,
 } bl_event_t;
 
+typedef enum {
+    BLINK_HANDOVER = 1,
+    BLINK_OUT_OF_SYNC,
+    BLINK_PEER_LOST,
+} bl_event_tag_t;
+
 typedef struct {
     union {
         struct {
@@ -49,6 +57,7 @@ typedef struct {
             uint64_t gateway_id;
         } gateway_info;
     } data;
+    bl_event_tag_t tag;
 } bl_event_data_t;
 
 typedef enum {
@@ -84,6 +93,17 @@ typedef struct {
     size_t n_cells; // number of cells in this schedule
     cell_t cells[BLINK_N_CELLS_MAX]; // cells in this schedule. NOTE(FIXME?): the first 3 cells must be beacons
 } schedule_t;
+
+typedef struct {
+    uint8_t channel;
+    int8_t rssi;
+    uint32_t start_ts;
+    uint32_t end_ts;
+    uint64_t asn;
+    bool to_me;
+    uint8_t packet[BLINK_PACKET_MAX_SIZE];
+    uint8_t packet_len;
+} bl_received_packet_t;
 
 //=========================== callbacks =======================================
 

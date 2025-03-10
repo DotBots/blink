@@ -125,6 +125,7 @@ bool bl_scan_select(bl_channel_info_t *best_channel_info, uint32_t ts_scan_start
         return false;
     }
     *best_channel_info = _get_channel_info_latest(scan_vars.scans[best_gateway_idx]);
+    // TODO: should probably report the average rssi: best_channel_info->rssi = best_gateway_rssi;
     return true;
 }
 

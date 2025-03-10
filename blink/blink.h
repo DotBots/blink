@@ -24,4 +24,7 @@ void bl_node_tx(uint8_t *payload, uint8_t payload_len);
 bool bl_node_is_connected(void);
 uint64_t bl_node_gateway_id(void);
 
+// -------- internal api --------
+void bl_handle_packet(uint8_t *packet, uint8_t length);
+
 #endif // __BLINK_H
