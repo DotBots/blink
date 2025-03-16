@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "sec.h"
 #include "packet.h"
 #include "mac.h"
 #include "scheduler.h"
@@ -122,6 +123,7 @@ bool bl_queue_pop(void) {
 }
 
 void bl_queue_set_join_request(uint64_t node_id) {
+    bl_sec_edhoc_init();
     queue_vars.join_packet.length = bl_build_packet_join_request(queue_vars.join_packet.buffer, node_id);
 }
 
