@@ -15,9 +15,12 @@
 #include "bl_gpio.h"
 #include "bl_device.h"
 #include "bl_radio.h"
+#include "sec.h"
+#include "bl_device.h"
 #include "bl_timer_hf.h"
-#include "blink.h"
 #include "packet.h"
+#include "queue.h"
+#include "blink.h"
 
 #include "minimote.h"
 

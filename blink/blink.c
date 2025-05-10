@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "sec.h"
 #include "bl_device.h"
 #include "models.h"
 #include "packet.h"
@@ -52,6 +53,7 @@ void blink_init(bl_node_type_t node_type, schedule_t *app_schedule, bl_event_cb_
     _blink_vars.node_type = node_type;
     _blink_vars.app_event_callback = app_event_callback;
 
+    bl_sec_init();
     bl_assoc_init(event_callback);
     bl_scheduler_init(node_type, app_schedule);
     bl_mac_init(node_type, event_callback);

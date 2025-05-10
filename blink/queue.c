@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "sec.h"
 #include "packet.h"
 #include "mac.h"
 #include "scheduler.h"
@@ -126,7 +127,19 @@ bool bl_queue_pop(void) {
 }
 
 void bl_queue_set_join_request(uint64_t node_id) {
-    queue_vars.join_packet.length = bl_build_packet_join_request(queue_vars.join_packet.buffer, node_id);
+    uint8_t len = bl_build_packet_join_request(queue_vars.join_packet.buffer, node_id);
+
+    // obtain and set edhoc message 1
+    bl_sec_edhoc_init();
+    uint8_t m1[MAX_MESSAGE_SIZE_LEN], m1_len;
+    int8_t res = bl_sec_edhoc_prepare_m1(m1, &m1_len);
+    if (res != 0) {
+        return;
+    }
+    memcpy(queue_vars.join_packet.buffer + len, m1, m1_len);
+    len += m1_len;
+
+    queue_vars.join_packet.length = len;
 }
 
 void bl_queue_set_join_response(uint64_t node_id, uint8_t assigned_cell_id) {
